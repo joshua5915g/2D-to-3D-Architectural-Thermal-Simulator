@@ -1,7 +1,22 @@
 "use client";
 
 import React, { useState } from "react";
-import { Scene } from "@/components/canvas/Scene";
+import dynamic from "next/dynamic";
+
+const Scene = dynamic(
+  () => import("@/components/canvas/Scene").then((mod) => mod.Scene),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="w-full h-full min-h-[500px] bg-black flex flex-col items-center justify-center">
+        <div className="w-10 h-10 border-2 border-burgundy border-t-transparent rounded-full animate-spin mb-3" />
+        <p className="text-xs uppercase tracking-widest text-neutral-400 font-mono">
+          INITIALIZING WEBGL 3D VIEWPORT...
+        </p>
+      </div>
+    ),
+  }
+);
 import { UploadZone } from "@/components/dashboard/UploadZone";
 import { ThermalStatsPanel } from "@/components/thermal/ThermalStatsPanel";
 import { TemperatureGradientLegend } from "@/components/thermal/TemperatureGradientLegend";
