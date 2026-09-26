@@ -17,6 +17,21 @@ const Scene = dynamic(
     ),
   }
 );
+
+const FloorplanViewer = dynamic(
+  () => import("@/components/FloorplanViewer").then((mod) => mod.FloorplanViewer),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="w-full h-full min-h-[500px] bg-black flex flex-col items-center justify-center">
+        <div className="w-10 h-10 border-2 border-burgundy border-t-transparent rounded-full animate-spin mb-3" />
+        <p className="text-xs uppercase tracking-widest text-neutral-400 font-mono">
+          EXTRUDING 3D VECTOR GEOMETRY...
+        </p>
+      </div>
+    ),
+  }
+);
 import { UploadZone } from "@/components/dashboard/UploadZone";
 import { ThermalStatsPanel } from "@/components/thermal/ThermalStatsPanel";
 import { TemperatureGradientLegend } from "@/components/thermal/TemperatureGradientLegend";
@@ -32,11 +47,12 @@ import {
   LogIn,
   LogOut,
   Maximize2,
+  Building2,
 } from "lucide-react";
 
 export default function HomePage() {
   const { user, loginWithEmail, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<"viewport" | "upload">("viewport");
+  const [activeTab, setActiveTab] = useState<"extrusion" | "thermal" | "upload">("extrusion");
   const [wireframeMode, setWireframeMode] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
@@ -61,18 +77,28 @@ export default function HomePage() {
         {/* View Switcher Navigation */}
         <div className="flex items-center gap-2 bg-[#121212] p-1 rounded-lg border border-white/10">
           <button
-            onClick={() => setActiveTab("viewport")}
-            className={`px-4 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-2 ${
-              activeTab === "viewport"
+            onClick={() => setActiveTab("extrusion")}
+            className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              activeTab === "extrusion"
                 ? "bg-burgundy text-white shadow-burgundy"
                 : "text-neutral-400 hover:text-white"
             }`}
           >
-            <Box className="w-3.5 h-3.5" /> 3D Viewport
+            <Building2 className="w-3.5 h-3.5" /> 3D Extrusion
+          </button>
+          <button
+            onClick={() => setActiveTab("thermal")}
+            className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              activeTab === "thermal"
+                ? "bg-burgundy text-white shadow-burgundy"
+                : "text-neutral-400 hover:text-white"
+            }`}
+          >
+            <Thermometer className="w-3.5 h-3.5" /> Thermal PINN
           </button>
           <button
             onClick={() => setActiveTab("upload")}
-            className={`px-4 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-2 ${
+            className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
               activeTab === "upload"
                 ? "bg-burgundy text-white shadow-burgundy"
                 : "text-neutral-400 hover:text-white"
@@ -107,7 +133,11 @@ export default function HomePage() {
 
       {/* Main Content Workspace */}
       <div className="flex-1 relative flex">
-        {activeTab === "viewport" ? (
+        {activeTab === "extrusion" ? (
+          <div className="relative w-full h-[calc(100vh-4rem)]">
+            <FloorplanViewer projectId={selectedProjectId} />
+          </div>
+        ) : activeTab === "thermal" ? (
           <div className="relative w-full h-[calc(100vh-4rem)]">
             {/* 3D Canvas Scene */}
             <Scene wireframe={wireframeMode} />
@@ -142,7 +172,7 @@ export default function HomePage() {
               userId={user?.uid || "guest_architect"}
               onProjectCreated={(id) => {
                 setSelectedProjectId(id);
-                setActiveTab("viewport");
+                setActiveTab("extrusion");
               }}
             />
           </div>

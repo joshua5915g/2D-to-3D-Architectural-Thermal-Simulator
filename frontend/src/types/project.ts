@@ -5,6 +5,24 @@ export type SimulationStatus =
   | "COMPLETED"
   | "FAILED";
 
+export type ElementType = "wall" | "window" | "door";
+
+export interface ArchitecturalElement {
+  id: string;
+  type: ElementType;
+  coordinates: [number, number][]; // normalized [x, y] coordinates 0.0 - 1.0
+  confidence?: number;
+  thickness?: number;
+}
+
+export interface FloorplanVectorData {
+  elements: ArchitecturalElement[];
+  image_dimensions: [number, number];
+  normalized: boolean;
+  element_counts: Record<string, number>;
+  message?: string;
+}
+
 export interface ProjectCoordinates {
   latitude: number;
   longitude: number;
@@ -24,3 +42,4 @@ export interface ProjectMetadata {
   meshUrl?: string;
   error?: string;
 }
+
