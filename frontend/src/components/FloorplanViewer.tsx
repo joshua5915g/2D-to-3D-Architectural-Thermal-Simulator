@@ -5,11 +5,12 @@ import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Grid, ContactShadows } from "@react-three/drei";
 import * as THREE from "three";
 import { WallMesh } from "./WallMesh";
+import { HVACNode } from "./HVACNode";
 import { TimelineControl } from "./TimelineControl";
 import { useFloorplanData } from "@/hooks/useFloorplanData";
 import { FloorplanVectorData } from "@/types/project";
-import { ThermalSimulationGridData, HourlySolarTelemetry } from "@/types/thermal";
-import { Layers, Box, Flame, Sparkles, Thermometer, SunMedium } from "lucide-react";
+import { ThermalSimulationGridData, HourlySolarTelemetry, HVACNodeData } from "@/types/thermal";
+import { Layers, Box, Flame, Sparkles, Thermometer, SunMedium, Snowflake, Plus } from "lucide-react";
 
 interface FloorplanViewerProps {
   projectId?: string | null;
@@ -85,21 +86,102 @@ export function FloorplanViewer({
   const [gridData, setGridData] = useState<ThermalSimulationGridData | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
 
+  // HVAC Digital Twin Nodes State
+  const [hvacNodes, setHvacNodes] = useState<HVACNodeData[]>([
+    {
+      id: "hvac-1",
+      name: "Terminal 01 (Living)",
+      position: [-2.0, 1.3, -1.5],
+      coolingCapacityKw: 3.5,
+      setpointCelsius: 21.0,
+      active: true,
+      radiusMeters: 3.5,
+    },
+    {
+      id: "hvac-2",
+      name: "Terminal 02 (Suite)",
+      position: [2.5, 1.3, 1.8],
+      coolingCapacityKw: 2.8,
+      setpointCelsius: 22.0,
+      active: true,
+      radiusMeters: 3.0,
+    },
+  ]);
+
   const activeVectorData = customVectorData || streamedData;
 
   const wallCount = activeVectorData?.element_counts?.wall ?? 0;
   const windowCount = activeVectorData?.element_counts?.window ?? 0;
   const doorCount = activeVectorData?.element_counts?.door ?? 0;
 
-  // Attempt fetching PINN simulation from backend when vector data is available
+  // HVAC Interaction Handlers
+  const handlePositionChange = (id: string, newPos: [number, number, number]) => {
+    setHvacNodes((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, position: newPos } : n))
+    );
+  };
+
+  const handleToggleActive = (id: string) => {
+    setHvacNodes((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, active: !n.active } : n))
+    );
+  };
+
+  const handleSetpointChange = (id: string, newSetpoint: number) => {
+    setHvacNodes((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, setpointCelsius: newSetpoint } : n))
+    );
+  };
+
+  const handleDeleteHvac = (id: string) => {
+    setHvacNodes((prev) => prev.filter((n) => n.id !== id));
+  };
+
+  const handleAddHvacNode = () => {
+    const nextIdx = hvacNodes.length + 1;
+    const rndX = (Math.random() - 0.5) * 6;
+    const rndZ = (Math.random() - 0.5) * 6;
+    const newNode: HVACNodeData = {
+      id: `hvac-${Date.now()}`,
+      name: `Terminal 0${nextIdx}`,
+      position: [Math.round(rndX * 10) / 10, 1.3, Math.round(rndZ * 10) / 10],
+      coolingCapacityKw: 3.0,
+      setpointCelsius: 21.5,
+      active: true,
+      radiusMeters: 3.2,
+    };
+    setHvacNodes((prev) => [...prev, newNode]);
+  };
+
+  // Attempt fetching PINN simulation from backend when vector data or HVAC nodes change
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
     if (!activeVectorData || activeVectorData.elements.length === 0) return;
 
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
     let isMounted = true;
-    const fetchSimulation = async () => {
+    debounceRef.current = setTimeout(async () => {
       try {
         setIsSimulating(true);
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || "http://localhost:8001";
+
+        // Map 3D positions to normalized [0, 1] for PINN PDE solver
+        const hvacSpecs = hvacNodes.map((n) => ({
+          id: n.id,
+          name: n.name,
+          x: Math.max(0.01, Math.min(0.99, n.position[0] / 16.0 + 0.5)),
+          y: Math.max(0.01, Math.min(0.99, n.position[2] / 16.0 + 0.5)),
+          z: Math.max(0.0, Math.min(1.0, n.position[1] / wallHeight)),
+          cooling_capacity_kw: n.coolingCapacityKw,
+          setpoint_celsius: n.setpointCelsius,
+          active: n.active,
+          radius_meters: n.radiusMeters ?? 3.0,
+        }));
+
         const res = await fetch(`${backendUrl}/api/thermal/simulate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -111,6 +193,7 @@ export function FloorplanViewer({
             ambient_base_temp: 24.0,
             grid_resolution: 24,
             epochs: 15,
+            hvac_nodes: hvacSpecs,
           }),
         });
 
@@ -125,13 +208,13 @@ export function FloorplanViewer({
       } finally {
         if (isMounted) setIsSimulating(false);
       }
-    };
+    }, 450);
 
-    fetchSimulation();
     return () => {
       isMounted = false;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [activeVectorData]);
+  }, [activeVectorData, hvacNodes, wallHeight]);
 
   // Current hour telemetry
   const hourIdx = Math.floor(Math.max(0, Math.min(23, activeHour)));
@@ -183,6 +266,19 @@ export function FloorplanViewer({
             activeHourRef={activeHourRef}
           />
 
+          {/* 3D Drag-and-Drop HVAC Digital Twin Terminals */}
+          {hvacNodes.map((node) => (
+            <HVACNode
+              key={node.id}
+              node={node}
+              onPositionChange={handlePositionChange}
+              onToggleActive={handleToggleActive}
+              onSetpointChange={handleSetpointChange}
+              onDelete={handleDeleteHvac}
+              worldScale={16.0}
+            />
+          ))}
+
           {/* Architectural Dark Grid with Burgundy Accents */}
           <Grid
             renderOrder={-1}
@@ -221,7 +317,7 @@ export function FloorplanViewer({
         </Suspense>
       </Canvas>
 
-      {/* Floating Top Left: Mode & Shading Controls */}
+      {/* Floating Top Left: Mode, HVAC & Shading Controls */}
       <div className="absolute top-5 left-5 z-10 flex flex-col gap-2">
         <div className="glass-panel rounded-xl p-3 flex flex-wrap items-center gap-2">
           {/* Thermal Shader Toggle Button */}
@@ -266,6 +362,39 @@ export function FloorplanViewer({
             />
             <span className="text-white font-mono w-8">{wallHeight.toFixed(1)}m</span>
           </div>
+        </div>
+
+        {/* HVAC Twin Control Toolbar */}
+        <div className="glass-panel rounded-xl p-2.5 flex flex-wrap items-center gap-2 text-xs">
+          <div className="flex items-center gap-1.5 font-bold text-burgundy-300">
+            <Snowflake className="w-3.5 h-3.5 text-burgundy-400 animate-spin" style={{ animationDuration: "12s" }} />
+            <span>HVAC Digital Twin:</span>
+          </div>
+
+          <div className="flex items-center gap-1 bg-black/60 px-2 py-0.5 rounded-lg border border-white/10 font-mono text-[11px]">
+            <span className="text-white font-bold">{hvacNodes.filter((n) => n.active).length}</span>
+            <span className="text-neutral-400">/ {hvacNodes.length} Active</span>
+          </div>
+
+          <div className="flex items-center gap-1 bg-black/60 px-2 py-0.5 rounded-lg border border-white/10 font-mono text-[11px]">
+            <span className="text-neutral-400">Load:</span>
+            <span className="text-burgundy-300 font-bold">
+              {hvacNodes
+                .filter((n) => n.active)
+                .reduce((acc, curr) => acc + curr.coolingCapacityKw, 0)
+                .toFixed(1)}{" "}
+              kW
+            </span>
+          </div>
+
+          <button
+            onClick={handleAddHvacNode}
+            className="px-2.5 py-1 rounded-lg bg-burgundy/80 hover:bg-burgundy text-white text-[11px] font-semibold transition-all flex items-center gap-1 shadow-burgundy border border-burgundy-400/40 ml-1"
+            title="Deploy new HVAC node into 3D space"
+          >
+            <Plus className="w-3 h-3" />
+            Add Terminal
+          </button>
         </div>
 
         {isSimulating && (

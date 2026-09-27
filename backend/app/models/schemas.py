@@ -81,9 +81,26 @@ class HourlySolarTelemetry(BaseModel):
     )
 
 
+class HVACNodeSpec(BaseModel):
+    id: str = Field(..., description="Unique HVAC node identifier (e.g., 'hvac_living_1')")
+    position: Tuple[float, float, float] = Field(
+        ..., description="3D coordinates [x, y, z] in normalized [0, 1] or metric space"
+    )
+    setpoint_celsius: float = Field(
+        default=21.0, ge=16.0, le=30.0, description="Target cooling thermostat setpoint"
+    )
+    cooling_capacity_kw: float = Field(
+        default=3.5, ge=0.5, le=20.0, description="Nominal cooling capacity in kW"
+    )
+    active: bool = Field(default=True, description="Operating state of the HVAC terminal")
+
+
 class ThermalSimulateRequest(BaseModel):
     vector_data: FloorplanVectorData = Field(
         ..., description="Extracted architectural vector elements from Phase 2"
+    )
+    hvac_nodes: List[HVACNodeSpec] = Field(
+        default_factory=list, description="Active mechanical cooling HVAC diffusers"
     )
     latitude: float = Field(
         default=41.3879, ge=-90.0, le=90.0, description="Site latitude in degrees"

@@ -7,14 +7,15 @@ from app.models.schemas import (
     ThermalSimulationGridResponse,
     HourlySolarTelemetry,
     ElementType,
+    HVACNodeSpec,
 )
 
 
 class ThermalPINN(nn.Module):
     """
     Spatio-Temporal Physics-Informed Neural Network (PINN) for transient
-    architectural heat transfer:
-    dT/dt - alpha * (d^2T/dx^2 + d^2T/dy^2) = Q(x, y, t)
+    architectural heat transfer coupled with localized HVAC mechanical cooling:
+    dT/dt - alpha * (d^2T/dx^2 + d^2T/dy^2) = Q_solar(x, y, t) - q_HVAC(x, y, t, T)
     """
 
     def __init__(
@@ -31,7 +32,6 @@ class ThermalPINN(nn.Module):
             layers.extend([nn.Linear(hidden_dim, hidden_dim), nn.Tanh()])
 
         out_layer = nn.Linear(hidden_dim, 1)
-        # Initialize output layer around base temperature
         nn.init.xavier_uniform_(out_layer.weight, gain=0.1)
         nn.init.constant_(out_layer.bias, base_temp)
 
@@ -46,15 +46,61 @@ class ThermalPINN(nn.Module):
         return self.net(xyt)
 
 
+def compute_hvac_cooling_sink(
+    T: torch.Tensor,
+    xyt: torch.Tensor,
+    hvac_nodes: List[HVACNodeSpec],
+    default_sigma: float = 0.12,
+) -> torch.Tensor:
+    """
+    Computes localized mechanical cooling sink term q_HVAC(x, y, t, T).
+    Models Gaussian air diffusion and thermostatic heat extraction:
+    q_HVAC = sum_k beta_k * exp(-||p - p_k||^2 / (2*sigma^2)) * ReLU(T - T_setpoint)
+    """
+    if not hvac_nodes:
+        return torch.zeros_like(T)
+
+    device = T.device
+    total_sink = torch.zeros_like(T)
+    x = xyt[:, 0:1]
+    y = xyt[:, 1:2]
+
+    for node in hvac_nodes:
+        if not node.active:
+            continue
+
+        nx = float(node.position[0])
+        ny = float(node.position[1]) if len(node.position) > 1 else 0.5
+        nx = max(0.05, min(0.95, nx))
+        ny = max(0.05, min(0.95, ny))
+
+        node_x = torch.tensor(nx, device=device)
+        node_y = torch.tensor(ny, device=device)
+        setpoint = torch.tensor(node.setpoint_celsius, device=device)
+
+        dist_sq = (x - node_x) ** 2 + (y - node_y) ** 2
+        gaussian_profile = torch.exp(-dist_sq / (2.0 * (default_sigma**2)))
+
+        # Thermostatic control: mechanical heat extraction proportional to temperature excess
+        temp_excess = torch.relu(T - setpoint)
+        cooling_intensity = 0.08 * (node.cooling_capacity_kw / 3.5)
+
+        sink_k = cooling_intensity * gaussian_profile * temp_excess
+        total_sink = total_sink + sink_k
+
+    return total_sink
+
+
 def compute_pde_loss(
     model: nn.Module,
     xyt: torch.Tensor,
     alpha: float = 0.04,
     source_q: Optional[torch.Tensor] = None,
+    hvac_nodes: Optional[List[HVACNodeSpec]] = None,
 ) -> torch.Tensor:
     """
-    Calculates PDE residual loss via PyTorch autograd:
-    Loss_pde = mean( (dT/dt - alpha * (d^2T/dx^2 + d^2T/dy^2) - Q)^2 )
+    Calculates transient PDE residual loss incorporating solar influx and HVAC mechanical cooling:
+    Loss_pde = mean( (dT/dt - alpha * (d^2T/dx^2 + d^2T/dy^2) - (Q_solar - q_HVAC))^2 )
     """
     xyt.requires_grad_(True)
     T = model(xyt)
@@ -90,9 +136,15 @@ def compute_pde_loss(
     )[0][:, 1:2]
 
     laplacian = d2t_dx2 + d2t_dy2
-    q = 0.0 if source_q is None else source_q
+    q_solar = 0.0 if source_q is None else source_q
 
-    pde_residual = dt_dt - (alpha * laplacian) - q
+    # Localized HVAC cooling term
+    q_hvac = compute_hvac_cooling_sink(T, xyt, hvac_nodes or [])
+
+    # Net heat balance: Solar gains minus Mechanical cooling extraction
+    net_heat_source = q_solar - q_hvac
+
+    pde_residual = dt_dt - (alpha * laplacian) - net_heat_source
     return torch.mean(pde_residual**2)
 
 
@@ -103,25 +155,45 @@ def generate_collocation_dataset(
     n_boundary: int = 200,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Generates training collocation points, boundary condition points, and initial condition points.
+    Generates training collocation points, boundary condition points, and initial condition points,
+    including dense spatial sampling around active HVAC cooling diffusers.
     """
     # 1. Domain interior collocation points (x, y, t)
     x_dom = np.random.uniform(0.05, 0.95, (n_collocation, 1))
     y_dom = np.random.uniform(0.05, 0.95, (n_collocation, 1))
     t_dom = np.random.uniform(0.0, 1.0, (n_collocation, 1))
+
+    # Dense sampling around active HVAC terminals to capture sharp thermal plumes
+    if request.hvac_nodes:
+        hvac_points = []
+        for node in request.hvac_nodes:
+            if not node.active:
+                continue
+            nx = max(0.05, min(0.95, float(node.position[0])))
+            ny = max(0.05, min(0.95, float(node.position[1])))
+            # Scatter 60 points in local Gaussian radius around diffuser
+            hx = np.random.normal(nx, 0.08, (60, 1))
+            hy = np.random.normal(ny, 0.08, (60, 1))
+            ht = np.random.uniform(0.0, 1.0, (60, 1))
+            hvac_points.append(np.hstack([np.clip(hx, 0.05, 0.95), np.clip(hy, 0.05, 0.95), ht]))
+
+        if hvac_points:
+            hvac_arr = np.vstack(hvac_points)
+            x_dom = np.vstack([x_dom, hvac_arr[:, 0:1]])
+            y_dom = np.vstack([y_dom, hvac_arr[:, 1:2]])
+            t_dom = np.vstack([t_dom, hvac_arr[:, 2:3]])
+
     xyt_colloc = np.hstack([x_dom, y_dom, t_dom])
+    total_colloc = xyt_colloc.shape[0]
 
     # Approximate internal source term Q from solar window penetration
-    # Hours with peak penetration inject thermal energy into interior
-    window_gain_by_t = np.zeros((n_collocation, 1))
-    for i in range(n_collocation):
+    window_gain_by_t = np.zeros((total_colloc, 1), dtype=np.float32)
+    for i in range(total_colloc):
         hour_idx = int(t_dom[i, 0] * 23.0)
         hour_flux = solar_telemetry[hour_idx].window_penetration_flux_wm2
-        # Windows shine across floorplan
         window_gain_by_t[i, 0] = (hour_flux / 500.0) * 0.15
 
     # 2. Boundary condition points along perimeter/envelope
-    # Extract wall and window elements
     wall_points: List[Tuple[float, float]] = []
     window_points: List[Tuple[float, float]] = []
 
@@ -132,7 +204,6 @@ def generate_collocation_dataset(
             else:
                 wall_points.append(pt)
 
-    # Fallback envelope points if floorplan empty
     if not wall_points:
         wall_points = [
             (0.0, 0.0),
@@ -143,27 +214,24 @@ def generate_collocation_dataset(
             (0.5, 1.0),
         ]
 
-    # Sample boundary points across time
     bc_xyt_list = []
     bc_t_targets = []
     base_t = request.ambient_base_temp
 
     for _ in range(n_boundary):
         pt = wall_points[np.random.randint(len(wall_points))]
-        t_val = np.random.uniform(0.0, 1.0)
+        t_val = float(np.random.uniform(0.0, 1.0))
         hour_idx = int(t_val * 23.0)
         tel = solar_telemetry[hour_idx]
 
-        # Diurnal temperature cycle: coolest before dawn (5 AM), peak afternoon (14 PM)
         hour_float = t_val * 24.0
         diurnal_variation = 5.5 * np.sin((hour_float - 9.0) * (2 * np.pi / 24.0))
 
-        # Solar radiation heating on exterior walls
         solar_facade_gain = (tel.dni_wm2 / 800.0) * 3.5 if tel.elevation_deg > 0 else 0.0
         boundary_temp = base_t + diurnal_variation + solar_facade_gain
 
-        bc_xyt_list.append([pt[0], pt[1], t_val])
-        bc_t_targets.append([boundary_temp])
+        bc_xyt_list.append([float(pt[0]), float(pt[1]), t_val])
+        bc_t_targets.append([float(boundary_temp)])
 
     xyt_bc = np.array(bc_xyt_list, dtype=np.float32)
     t_bc_target = np.array(bc_t_targets, dtype=np.float32)
@@ -173,7 +241,6 @@ def generate_collocation_dataset(
     y_ic = np.random.uniform(0.0, 1.0, (100, 1))
     t_ic = np.zeros((100, 1))
     xyt_ic = np.hstack([x_ic, y_ic, t_ic])
-    # Midnight ambient baseline (cool)
     t_ic_target = np.full((100, 1), base_t - 2.5, dtype=np.float32)
 
     return (
@@ -191,7 +258,8 @@ def solve_24h_thermal_grid(
 ) -> ThermalSimulationGridResponse:
     """
     Trains the Physics-Informed Neural Network (PINN) and generates
-    the 24-hour temporal grid temperature matrix of shape [24, N, N].
+    the 24-hour temporal grid temperature matrix of shape [24, N, N],
+    incorporating mechanical cooling from active HVAC diffusers.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -201,7 +269,7 @@ def solve_24h_thermal_grid(
         base_temp=request.ambient_base_temp,
     ).to(device)
 
-    # Generate training points
+    # Generate training points with HVAC cluster refinement
     (
         xyt_colloc,
         source_q,
@@ -226,8 +294,14 @@ def solve_24h_thermal_grid(
     for _ in range(epochs):
         optimizer.zero_grad()
 
-        # 1. Physics loss (PDE residual)
-        loss_pde = compute_pde_loss(model, xyt_colloc, alpha=0.03, source_q=source_q)
+        # 1. Physics loss with HVAC cooling term
+        loss_pde = compute_pde_loss(
+            model=model,
+            xyt=xyt_colloc,
+            alpha=0.03,
+            source_q=source_q,
+            hvac_nodes=request.hvac_nodes,
+        )
 
         # 2. Boundary condition loss
         pred_bc = model(xyt_bc)
@@ -267,7 +341,6 @@ def solve_24h_thermal_grid(
             )
             t_pred = model(query_xyt).cpu().numpy().reshape(res, res)
 
-            # Round values to 2 decimal places for clean JSON payload
             grid_slice = [[round(float(val), 2) for val in row] for row in t_pred]
             thermal_grids.append(grid_slice)
 
@@ -290,5 +363,5 @@ def solve_24h_thermal_grid(
         max_temperature=round(global_max, 2),
         average_temperature=round(avg_temp, 2),
         status="COMPLETED",
-        message="24-hour PINN thermal simulation completed successfully.",
+        message="24-hour PINN thermal simulation with HVAC dynamics completed.",
     )

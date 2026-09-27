@@ -54,3 +54,25 @@ export interface ThermalSimulationResult {
   gridData?: ThermalSimulationGridData;
 }
 
+export interface HVACNodeData {
+  id: string;
+  name: string;
+  position: [number, number, number]; // Three.js world coordinates
+  setpointCelsius: number;
+  coolingCapacityKw: number;
+  active: boolean;
+  radiusMeters?: number;
+}
+
+export interface HVACNodeSpec {
+  id: string;
+  name?: string;
+  x: number;
+  y: number;
+  z: number;
+  cooling_capacity_kw: number;
+  setpoint_celsius: number;
+  active: boolean;
+  radius_meters?: number;
+}
+
