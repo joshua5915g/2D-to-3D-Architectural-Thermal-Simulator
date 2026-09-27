@@ -2,6 +2,24 @@
 
 import React, { useState } from "react";
 import dynamic from "next/dynamic";
+import { UploadZone } from "@/components/dashboard/UploadZone";
+import { GenerativeCanvas } from "@/components/GenerativeCanvas";
+import { Button } from "@/components/ui/Button";
+import { useAuth } from "@/hooks/useAuth";
+import { FloorplanVectorData } from "@/types/project";
+import {
+  Layers,
+  Thermometer,
+  UploadCloud,
+  Box,
+  Sun,
+  Shield,
+  LogIn,
+  LogOut,
+  Maximize2,
+  Building2,
+  Sparkles,
+} from "lucide-react";
 
 const FloorplanViewer = dynamic(
   () => import("@/components/FloorplanViewer").then((mod) => mod.FloorplanViewer),
@@ -17,26 +35,12 @@ const FloorplanViewer = dynamic(
     ),
   }
 );
-import { UploadZone } from "@/components/dashboard/UploadZone";
-import { Button } from "@/components/ui/Button";
-import { useAuth } from "@/hooks/useAuth";
-import {
-  Layers,
-  Thermometer,
-  UploadCloud,
-  Box,
-  Sun,
-  Shield,
-  LogIn,
-  LogOut,
-  Maximize2,
-  Building2,
-} from "lucide-react";
 
 export default function HomePage() {
   const { user, loginWithEmail, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<"extrusion" | "thermal" | "upload">("extrusion");
+  const [activeTab, setActiveTab] = useState<"extrusion" | "thermal" | "generative" | "upload">("extrusion");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [generatedVectorData, setGeneratedVectorData] = useState<FloorplanVectorData | null>(null);
 
   return (
     <main className="min-h-screen bg-black text-white flex flex-col relative overflow-hidden">
@@ -57,10 +61,10 @@ export default function HomePage() {
         </div>
 
         {/* View Switcher Navigation */}
-        <div className="flex items-center gap-2 bg-[#121212] p-1 rounded-lg border border-white/10">
+        <div className="flex items-center gap-1.5 bg-[#121212] p-1 rounded-lg border border-white/10">
           <button
             onClick={() => setActiveTab("extrusion")}
-            className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
               activeTab === "extrusion"
                 ? "bg-burgundy text-white shadow-burgundy"
                 : "text-neutral-400 hover:text-white"
@@ -70,7 +74,7 @@ export default function HomePage() {
           </button>
           <button
             onClick={() => setActiveTab("thermal")}
-            className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
               activeTab === "thermal"
                 ? "bg-burgundy text-white shadow-burgundy"
                 : "text-neutral-400 hover:text-white"
@@ -79,8 +83,18 @@ export default function HomePage() {
             <Thermometer className="w-3.5 h-3.5" /> Thermal PINN
           </button>
           <button
+            onClick={() => setActiveTab("generative")}
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              activeTab === "generative"
+                ? "bg-burgundy text-white shadow-burgundy border border-burgundy-400/40"
+                : "text-neutral-400 hover:text-white"
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-burgundy-400" /> Generative AI
+          </button>
+          <button
             onClick={() => setActiveTab("upload")}
-            className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 ${
               activeTab === "upload"
                 ? "bg-burgundy text-white shadow-burgundy"
                 : "text-neutral-400 hover:text-white"
@@ -117,11 +131,29 @@ export default function HomePage() {
       <div className="flex-1 relative flex">
         {activeTab === "extrusion" ? (
           <div className="relative w-full h-[calc(100vh-4rem)]">
-            <FloorplanViewer projectId={selectedProjectId} />
+            <FloorplanViewer
+              projectId={selectedProjectId}
+              customVectorData={generatedVectorData}
+              initialThermalMode={false}
+            />
           </div>
         ) : activeTab === "thermal" ? (
           <div className="relative w-full h-[calc(100vh-4rem)]">
-            <FloorplanViewer projectId={selectedProjectId} initialThermalMode={true} />
+            <FloorplanViewer
+              projectId={selectedProjectId}
+              customVectorData={generatedVectorData}
+              initialThermalMode={true}
+            />
+          </div>
+        ) : activeTab === "generative" ? (
+          <div className="flex-1 overflow-y-auto">
+            <GenerativeCanvas
+              onLayoutGenerated={(data) => setGeneratedVectorData(data)}
+              onNavigateTo3D={(data) => {
+                setGeneratedVectorData(data);
+                setActiveTab("extrusion");
+              }}
+            />
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-6 md:p-12 flex items-center justify-center">

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Any
 from pydantic import BaseModel, Field, HttpUrl
 
 
@@ -122,4 +122,56 @@ class ThermalSimulationGridResponse(BaseModel):
     average_temperature: float = Field(..., description="Mean interior temperature in Celsius")
     status: str = Field(default="COMPLETED", description="Simulation execution status")
     message: str = Field(default="24-hour PINN thermal simulation completed.")
+
+
+class GenerateFloorplanRequest(BaseModel):
+    square_footage: float = Field(
+        default=1800.0,
+        ge=400.0,
+        le=8000.0,
+        description="Target interior living area in square feet",
+    )
+    num_bedrooms: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        description="Desired number of bedrooms",
+    )
+    num_bathrooms: int = Field(
+        default=2,
+        ge=1,
+        le=6,
+        description="Desired number of bathrooms",
+    )
+    include_balcony: bool = Field(
+        default=True,
+        description="Whether to include an exterior terrace or balcony boundary",
+    )
+    aspect_ratio: float = Field(
+        default=1.33,
+        ge=0.5,
+        le=2.5,
+        description="Target building envelope width-to-height aspect ratio",
+    )
+    architectural_style: str = Field(
+        default="MODERN_MINIMALIST",
+        description="Design taxonomy: MODERN_MINIMALIST, CONTEMPORARY_OPEN, or BIOPHILIC",
+    )
+
+
+class GeneratedFloorplanResponse(BaseModel):
+    vector_data: FloorplanVectorData = Field(
+        ..., description="Normalized 2D architectural vector geometry for 3D extrusion"
+    )
+    rooms: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Synthesized spatial room layout breakdown"
+    )
+    total_area_sqft: float = Field(..., description="Actual estimated square footage")
+    aspect_ratio: float = Field(..., description="Envelope aspect ratio")
+    generator_loss: Optional[float] = Field(
+        default=None, description="GAN generator convergence metric"
+    )
+    status: str = Field(default="COMPLETED")
+    message: str = Field(default="Floorplan synthesized successfully by Generative AI.")
+
 
