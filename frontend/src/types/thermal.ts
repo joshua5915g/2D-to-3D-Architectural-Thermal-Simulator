@@ -21,6 +21,28 @@ export interface RoomThermalSummary {
   thermalComfortIndex: "OPTIMAL" | "WARM" | "HOT" | "CRITICAL";
 }
 
+export interface HourlySolarTelemetry {
+  hour: number;
+  time_label: string;
+  elevation_deg: number;
+  azimuth_deg: number;
+  dni_wm2: number;
+  dhi_wm2: number;
+  window_penetration_flux_wm2: number;
+}
+
+export interface ThermalSimulationGridData {
+  time_steps: string[];
+  solar_telemetry: HourlySolarTelemetry[];
+  thermal_grids: number[][][]; // shape [24, N, N]
+  grid_resolution: number;
+  min_temperature: number;
+  max_temperature: number;
+  average_temperature: number;
+  status: string;
+  message?: string;
+}
+
 export interface ThermalSimulationResult {
   projectId: string;
   ambientTempCelsius: number;
@@ -29,4 +51,6 @@ export interface ThermalSimulationResult {
   surfaceNodes: ThermalNodeResult[];
   roomSummaries: RoomThermalSummary[];
   simulatedAt: number;
+  gridData?: ThermalSimulationGridData;
 }
+

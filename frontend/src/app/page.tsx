@@ -3,21 +3,6 @@
 import React, { useState } from "react";
 import dynamic from "next/dynamic";
 
-const Scene = dynamic(
-  () => import("@/components/canvas/Scene").then((mod) => mod.Scene),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="w-full h-full min-h-[500px] bg-black flex flex-col items-center justify-center">
-        <div className="w-10 h-10 border-2 border-burgundy border-t-transparent rounded-full animate-spin mb-3" />
-        <p className="text-xs uppercase tracking-widest text-neutral-400 font-mono">
-          INITIALIZING WEBGL 3D VIEWPORT...
-        </p>
-      </div>
-    ),
-  }
-);
-
 const FloorplanViewer = dynamic(
   () => import("@/components/FloorplanViewer").then((mod) => mod.FloorplanViewer),
   {
@@ -26,15 +11,13 @@ const FloorplanViewer = dynamic(
       <div className="w-full h-full min-h-[500px] bg-black flex flex-col items-center justify-center">
         <div className="w-10 h-10 border-2 border-burgundy border-t-transparent rounded-full animate-spin mb-3" />
         <p className="text-xs uppercase tracking-widest text-neutral-400 font-mono">
-          EXTRUDING 3D VECTOR GEOMETRY...
+          EXTRUDING 3D VECTOR GEOMETRY & THERMAL SHADER...
         </p>
       </div>
     ),
   }
 );
 import { UploadZone } from "@/components/dashboard/UploadZone";
-import { ThermalStatsPanel } from "@/components/thermal/ThermalStatsPanel";
-import { TemperatureGradientLegend } from "@/components/thermal/TemperatureGradientLegend";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -53,7 +36,6 @@ import {
 export default function HomePage() {
   const { user, loginWithEmail, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<"extrusion" | "thermal" | "upload">("extrusion");
-  const [wireframeMode, setWireframeMode] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 
   return (
@@ -139,32 +121,7 @@ export default function HomePage() {
           </div>
         ) : activeTab === "thermal" ? (
           <div className="relative w-full h-[calc(100vh-4rem)]">
-            {/* 3D Canvas Scene */}
-            <Scene wireframe={wireframeMode} />
-
-            {/* Floating Top Left Controls */}
-            <div className="absolute top-6 left-6 z-10 space-y-3 pointer-events-auto">
-              <div className="glass-panel rounded-xl p-3 flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant={wireframeMode ? "burgundy" : "outline"}
-                  onClick={() => setWireframeMode(!wireframeMode)}
-                >
-                  <Layers className="w-3.5 h-3.5 mr-1.5" />
-                  {wireframeMode ? "Solid Shading" : "Wireframe Mesh"}
-                </Button>
-              </div>
-            </div>
-
-            {/* Floating Top Right: Telemetry Metrics Panel */}
-            <div className="absolute top-6 right-6 z-10 pointer-events-auto hidden md:block">
-              <ThermalStatsPanel />
-            </div>
-
-            {/* Floating Bottom Center: Thermal Heatmap Legend */}
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 pointer-events-auto">
-              <TemperatureGradientLegend minTemp={18} maxTemp={38} />
-            </div>
+            <FloorplanViewer projectId={selectedProjectId} initialThermalMode={true} />
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-6 md:p-12 flex items-center justify-center">
