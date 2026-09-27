@@ -33,6 +33,7 @@ export function TimelineControl({
 }: TimelineControlProps) {
   const [internalPlaying, setInternalPlaying] = useState(false);
   const [displayHour, setDisplayHour] = useState(activeHour);
+  const currentHourRef = useRef<number>(activeHour);
   const sliderRef = useRef<HTMLInputElement>(null);
 
   const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalPlaying;
@@ -47,6 +48,7 @@ export function TimelineControl({
 
   // Keep local display hour synchronized if changed from outside
   useEffect(() => {
+    currentHourRef.current = activeHour;
     setDisplayHour(activeHour);
   }, [activeHour]);
 
@@ -55,14 +57,13 @@ export function TimelineControl({
     if (!isPlaying) return;
 
     const interval = setInterval(() => {
-      setDisplayHour((prev) => {
-        const next = (prev + 0.15) % 24;
-        if (activeHourRef) {
-          activeHourRef.current = next;
-        }
-        onHourChange(next);
-        return next;
-      });
+      const next = (currentHourRef.current + 0.15) % 24;
+      currentHourRef.current = next;
+      if (activeHourRef) {
+        activeHourRef.current = next;
+      }
+      setDisplayHour(next);
+      onHourChange(next);
     }, 50);
 
     return () => clearInterval(interval);
@@ -72,6 +73,7 @@ export function TimelineControl({
   const handleSliderChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const val = parseFloat(e.target.value);
+      currentHourRef.current = val;
       setDisplayHour(val);
 
       // Instantaneous mutable ref mutation for 60 FPS GPU update without React lag
@@ -128,6 +130,7 @@ export function TimelineControl({
             <button
               onClick={() => {
                 const zero = 0;
+                currentHourRef.current = zero;
                 setDisplayHour(zero);
                 if (activeHourRef) activeHourRef.current = zero;
                 onHourChange(zero);
