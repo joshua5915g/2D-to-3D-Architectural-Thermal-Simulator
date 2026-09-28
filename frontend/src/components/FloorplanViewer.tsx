@@ -9,6 +9,7 @@ import { HVACNode } from "./HVACNode";
 import { IoTWidget } from "./IoTWidget";
 import { WindMesh } from "./WindMesh";
 import { VentilationWidget } from "./VentilationWidget";
+import { ExteriorShadingScene, ShadingWidget } from "./ShadingTools";
 import { TimelineControl } from "./TimelineControl";
 import { useFloorplanData } from "@/hooks/useFloorplanData";
 import { FloorplanVectorData } from "@/types/project";
@@ -19,6 +20,8 @@ import {
   IoTSensorData,
   WindowStateData,
   CFDSimulationResponse,
+  ExteriorShadingElement,
+  ShadingElementType,
 } from "@/types/thermal";
 import {
   Layers,
@@ -30,6 +33,8 @@ import {
   Snowflake,
   Plus,
   Wind,
+  Sun,
+  Umbrella,
 } from "lucide-react";
 
 interface FloorplanViewerProps {
@@ -226,6 +231,76 @@ export function FloorplanViewer({
     setWindowStates(next);
   };
 
+  // Passive Solar Shading Interventions State
+  const [shadingMode, setShadingMode] = useState(false);
+  const [selectedShadingId, setSelectedShadingId] = useState<string | null>(null);
+  const [shadingElements, setShadingElements] = useState<ExteriorShadingElement[]>([
+    {
+      id: "tree-south",
+      type: "tree",
+      position: [-5.5, -3.8, 0.0],
+      dimensions: [3.6, 3.6, 5.0],
+      transmittance: 0.15,
+    },
+    {
+      id: "overhang-main",
+      type: "overhang",
+      position: [0.0, -5.2, 2.8],
+      dimensions: [5.5, 1.2, 0.15],
+      transmittance: 0.0,
+    },
+  ]);
+
+  const handleAddShadingElement = (type: ShadingElementType) => {
+    const id = `${type}-${Date.now().toString().slice(-4)}`;
+    let newElem: ExteriorShadingElement;
+
+    if (type === "tree") {
+      newElem = {
+        id,
+        type: "tree",
+        position: [-6.0 + (Math.random() - 0.5) * 4, -4.0 + (Math.random() - 0.5) * 4, 0.0],
+        dimensions: [3.5, 3.5, 4.8],
+        transmittance: 0.15,
+      };
+    } else if (type === "overhang") {
+      newElem = {
+        id,
+        type: "overhang",
+        position: [2.5, -4.5, 2.8],
+        dimensions: [4.0, 1.2, 0.15],
+        transmittance: 0.0,
+      };
+    } else {
+      newElem = {
+        id,
+        type: "louver",
+        position: [-2.0, 5.0, 1.4],
+        dimensions: [2.5, 0.2, 1.6],
+        transmittance: 0.1,
+        angle_deg: 45,
+      };
+    }
+
+    setShadingElements((prev) => [...prev, newElem]);
+    setSelectedShadingId(id);
+    setShadingMode(true);
+  };
+
+  const handleUpdateShadingElement = (
+    id: string,
+    updates: Partial<ExteriorShadingElement>
+  ) => {
+    setShadingElements((prev) =>
+      prev.map((el) => (el.id === id ? { ...el, ...updates } : el))
+    );
+  };
+
+  const handleRemoveShadingElement = (id: string) => {
+    setShadingElements((prev) => prev.filter((el) => el.id !== id));
+    if (selectedShadingId === id) setSelectedShadingId(null);
+  };
+
   // Debounced CFD Simulation trigger
   const cfdDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -352,6 +427,15 @@ export function FloorplanViewer({
           radius_meters: n.radiusMeters ?? 3.0,
         }));
 
+        const shadingSpecs = shadingElements.map((el) => ({
+          id: el.id,
+          type: el.type,
+          position: el.position,
+          dimensions: el.dimensions,
+          transmittance: el.transmittance,
+          angle_deg: el.angle_deg ?? 0.0,
+        }));
+
         const res = await fetch(`${backendUrl}/api/thermal/simulate`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -364,6 +448,7 @@ export function FloorplanViewer({
             grid_resolution: 24,
             epochs: 15,
             hvac_nodes: hvacSpecs,
+            shading_elements: shadingSpecs,
           }),
         });
 
@@ -384,7 +469,7 @@ export function FloorplanViewer({
       isMounted = false;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [activeVectorData, hvacNodes, wallHeight]);
+  }, [activeVectorData, hvacNodes, shadingElements, wallHeight]);
 
   // Current hour telemetry
   const hourIdx = Math.floor(Math.max(0, Math.min(23, activeHour)));
@@ -472,6 +557,13 @@ export function FloorplanViewer({
             />
           )}
 
+          {/* Passive Solar Shading Interventions (Trees, Overhangs, Louvers) */}
+          <ExteriorShadingScene
+            elements={shadingElements}
+            selectedId={selectedShadingId}
+            onSelect={setSelectedShadingId}
+          />
+
           {/* Architectural Dark Grid with Burgundy Accents */}
           <Grid
             renderOrder={-1}
@@ -551,8 +643,21 @@ export function FloorplanViewer({
             <Wind className={`w-3.5 h-3.5 ${ventilationMode ? "animate-pulse text-[#FF2A55]" : ""}`} />
             {ventilationMode ? "CFD Wind Flow" : "Wind Off"}
           </button>
-
-          <div className="h-4 w-[1px] bg-white/15 mx-1" />
+ 
+           {/* Passive Solar Shading Interventions Button */}
+           <button
+             onClick={() => setShadingMode(!shadingMode)}
+             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+               shadingMode
+                 ? "bg-[#6D001A] text-white shadow-[0_0_12px_#6D001A] border border-burgundy-400/50"
+                 : "bg-surface hover:bg-surface-hover text-neutral-400 border border-white/10"
+             }`}
+           >
+             <Umbrella className={`w-3.5 h-3.5 ${shadingMode ? "animate-bounce text-amber-400" : ""}`} />
+             {shadingMode ? "Shading Active" : "Passive Shading"}
+           </button>
+ 
+           <div className="h-4 w-[1px] bg-white/15 mx-1" />
 
           {/* Wall Height Slider */}
           <div className="flex items-center gap-2 text-xs text-neutral-400">
@@ -679,6 +784,22 @@ export function FloorplanViewer({
           activeMode={ventilationMode}
           onToggleActive={() => setVentilationMode(!ventilationMode)}
         />
+
+        {/* Passive Solar Shading Interventions Toolset */}
+        {shadingMode && (
+          <ShadingWidget
+            elements={shadingElements}
+            onAddElement={handleAddShadingElement}
+            onUpdateElement={handleUpdateShadingElement}
+            onRemoveElement={handleRemoveShadingElement}
+            selectedId={selectedShadingId}
+            onSelect={setSelectedShadingId}
+            onClose={() => setShadingMode(false)}
+            onTriggerResimulation={() => {
+              setShadingElements((prev) => [...prev]);
+            }}
+          />
+        )}
       </div>
 
       {/* Floating Bottom Center: Diurnal Timeline Scrubber */}

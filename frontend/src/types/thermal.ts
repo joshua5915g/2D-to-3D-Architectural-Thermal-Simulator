@@ -122,3 +122,14 @@ export interface CFDSimulationResponse {
   message?: string;
 }
 
+export type ShadingElementType = "tree" | "overhang" | "louver";
+
+export interface ExteriorShadingElement {
+  id: string;
+  type: ShadingElementType;
+  position: [number, number, number];
+  dimensions: [number, number, number]; // [width/radius, depth, height]
+  transmittance: number;
+  angle_deg?: number;
+}
+

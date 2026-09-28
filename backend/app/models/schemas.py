@@ -105,12 +105,46 @@ class HVACNodeSpec(BaseModel):
         return (self.x if self.x is not None else 0.5, self.y if self.y is not None else 0.5, self.z if self.z is not None else 0.5)
 
 
+class ShadingElementType(str, Enum):
+    TREE = "tree"
+    OVERHANG = "overhang"
+    LOUVER = "louver"
+
+
+class ExteriorShadingElementSpec(BaseModel):
+    id: str = Field(..., description="Unique shading element identifier")
+    type: ShadingElementType = Field(
+        default=ShadingElementType.TREE,
+        description="Shading intervention type: tree, overhang, or louver",
+    )
+    position: Tuple[float, float, float] = Field(
+        default=(0.5, 0.5, 0.0), description="3D coordinates [x, y, z]"
+    )
+    dimensions: Tuple[float, float, float] = Field(
+        default=(2.0, 2.0, 3.5),
+        description="Physical dimensions [width/radius, depth, height]",
+    )
+    transmittance: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description="Solar optical transmittance (0.0 = completely opaque, 0.15 = tree canopy)",
+    )
+    angle_deg: float = Field(
+        default=0.0, description="Tilt or slat angle in degrees"
+    )
+
+
 class ThermalSimulateRequest(BaseModel):
     vector_data: FloorplanVectorData = Field(
         ..., description="Extracted architectural vector elements from Phase 2"
     )
     hvac_nodes: List[HVACNodeSpec] = Field(
         default_factory=list, description="Active mechanical cooling HVAC diffusers"
+    )
+    shading_elements: List[ExteriorShadingElementSpec] = Field(
+        default_factory=list,
+        description="Exterior passive solar shading elements (trees, overhangs, louvers)",
     )
     latitude: float = Field(
         default=41.3879, ge=-90.0, le=90.0, description="Site latitude in degrees"

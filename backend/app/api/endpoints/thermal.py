@@ -81,12 +81,13 @@ async def simulate_thermal_cycle(request: ThermalSimulateRequest):
             elem for elem in request.vector_data.elements if elem.type == ElementType.WINDOW
         ]
 
-        # 2. Compute 24-hour diurnal solar trajectory & aperture penetration
+        # 2. Compute 24-hour diurnal solar trajectory & aperture penetration with ray-traced shading
         solar_telemetry = calculate_full_diurnal_solar_data(
             latitude=request.latitude,
             longitude=request.longitude,
             date_str=request.date,
             windows=windows,
+            shading_elements=request.shading_elements,
         )
 
         # 3. Train PINN model and generate temporal grid heatmaps

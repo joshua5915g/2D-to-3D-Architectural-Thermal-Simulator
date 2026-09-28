@@ -2,7 +2,176 @@ import math
 import numpy as np
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from app.models.schemas import HourlySolarTelemetry, ArchitecturalElement, ElementType
+from app.models.schemas import (
+    HourlySolarTelemetry,
+    ArchitecturalElement,
+    ElementType,
+    ExteriorShadingElementSpec,
+    ShadingElementType,
+)
+
+
+def calculate_window_solar_flux(
+    windows: List[ArchitecturalElement],
+    solar_telemetry: List[HourlySolarTelemetry],
+    default_shgc: float = 0.65,
+    shading_elements: Optional[List[ExteriorShadingElementSpec]] = None,
+) -> Dict[int, float]:
+    """
+    Computes transmitted solar heat flux (in Watts/m^2) penetrating into the building
+    through window apertures for each hour of the 24-hour cycle.
+    Accounts for aperture orientation, surface area, incidence angle, and
+    ray-traced shadows cast by exterior passive shading interventions
+    (trees, structural overhangs, and louvers).
+    """
+    hourly_window_flux: Dict[int, float] = {h: 0.0 for h in range(24)}
+
+    if not windows:
+        return hourly_window_flux
+
+    # Estimate window normal vectors, midpoints, and effective areas
+    window_facets = []
+    for win in windows:
+        coords = win.coordinates
+        if len(coords) >= 2:
+            p0 = coords[0]
+            p1 = coords[1]
+            dx = p1[0] - p0[0]
+            dy = p1[1] - p0[1]
+            length = math.hypot(dx, dy)
+            if length > 1e-4:
+                nx = -dy / length
+                ny = dx / length
+                mx = (p0[0] + p1[0]) / 2.0
+                my = (p0[1] + p1[1]) / 2.0
+                mz = 1.4  # Center height of window (m)
+                win_azimuth = (math.degrees(math.atan2(nx, ny)) + 360.0) % 360.0
+                area = max(1.0, length * 1.5)  # Nominal window height 1.5m
+                window_facets.append({
+                    "id": win.id,
+                    "center": (mx, my, mz),
+                    "normal": (nx, ny),
+                    "azimuth": win_azimuth,
+                    "area": area,
+                    "width": getattr(win, "thickness", None) or length,
+                })
+
+    if not window_facets:
+        return hourly_window_flux
+
+    for tel in solar_telemetry:
+        hour = tel.hour
+        if tel.elevation_deg <= 0.0 or tel.dni_wm2 <= 0:
+            hourly_window_flux[hour] = 0.0
+            continue
+
+        sun_az_rad = math.radians(tel.azimuth_deg)
+        sun_el_rad = math.radians(tel.elevation_deg)
+
+        # Sun beam unit vector pointing towards the sun (X = East, Y = North, Z = Up)
+        sx = math.sin(sun_az_rad) * math.cos(sun_el_rad)
+        sy = math.cos(sun_az_rad) * math.cos(sun_el_rad)
+        sz = math.sin(sun_el_rad)
+
+        total_gain_for_hour = 0.0
+        for facet in window_facets:
+            nx, ny = facet["normal"]
+            mx, my, mz = facet["center"]
+
+            # Beam comes from direction (sx, sy), so outward normal dot beam direction
+            cos_theta = -(nx * sx + ny * sy)
+            if cos_theta <= 0:
+                # Sun is behind the window facade plane
+                diffuse_flux = tel.dhi_wm2 * 0.3 * default_shgc * facet["area"]
+                total_gain_for_hour += diffuse_flux
+                continue
+
+            # Ray-traced shadow occlusion from exterior interventions
+            shading_fraction = 0.0
+            if shading_elements:
+                for elem in shading_elements:
+                    ex, ey, ez = elem.position
+                    ew, ed, eh = elem.dimensions
+
+                    if elem.type == ShadingElementType.TREE or elem.type == "tree":
+                        # Tree canopy ray-sphere intersection
+                        canopy_center = (ex, ey, ez + eh * 0.65)
+                        canopy_radius = max(1.0, ew / 2.0)
+                        
+                        vx = canopy_center[0] - mx
+                        vy = canopy_center[1] - my
+                        vz = canopy_center[2] - mz
+                        
+                        # Project vector onto sun ray direction
+                        t_proj = vx * sx + vy * sy + vz * sz
+                        if t_proj > 0.1:
+                            dist_sq = (vx**2 + vy**2 + vz**2) - (t_proj**2)
+                            if dist_sq <= canopy_radius**2:
+                                # Ray hits foliage!
+                                blockage = 1.0 - elem.transmittance
+                                shading_fraction = max(shading_fraction, blockage)
+
+                    elif elem.type == ShadingElementType.OVERHANG or elem.type == "overhang":
+                        # Brise-soleil / Overhang geometric cutoff
+                        dist_xy = math.hypot(mx - ex, my - ey)
+                        if dist_xy < 4.0:
+                            # Height difference between overhang and window center
+                            h_diff = max(0.4, (ez + eh) - mz)
+                            cutoff_tan = ed / h_diff
+                            sun_tan = math.tan(sun_el_rad)
+                            if sun_tan > 0:
+                                overhang_occ = min(1.0, sun_tan * cutoff_tan)
+                                shading_fraction = max(shading_fraction, overhang_occ * (1.0 - elem.transmittance))
+
+                    elif elem.type == ShadingElementType.LOUVER or elem.type == "louver":
+                        dist_xy = math.hypot(mx - ex, my - ey)
+                        if dist_xy < 3.0:
+                            # Louver slat angle interception
+                            slat_occ = 0.75 + 0.20 * math.sin(sun_el_rad)
+                            shading_fraction = max(shading_fraction, min(1.0, slat_occ))
+
+            # Apply attenuation
+            shading_fraction = min(1.0, max(0.0, shading_fraction))
+            direct_flux = (
+                tel.dni_wm2
+                * cos_theta
+                * default_shgc
+                * facet["area"]
+                * (1.0 - shading_fraction)
+            )
+
+            # Diffuse component through glass (slightly attenuated by sky obstruction)
+            diffuse_flux = (
+                tel.dhi_wm2 * 0.5 * default_shgc * facet["area"] * (1.0 - 0.25 * shading_fraction)
+            )
+            total_gain_for_hour += direct_flux + diffuse_flux
+
+        hourly_window_flux[hour] = round(total_gain_for_hour, 2)
+
+    return hourly_window_flux
+
+
+def calculate_full_diurnal_solar_data(
+    latitude: float,
+    longitude: float,
+    date_str: str = "2026-06-21",
+    windows: Optional[List[ArchitecturalElement]] = None,
+    shading_elements: Optional[List[ExteriorShadingElementSpec]] = None,
+) -> List[HourlySolarTelemetry]:
+    """
+    Computes 24-hour solar telemetry including direct window penetration flux
+    with ray-traced passive shading attenuation.
+    """
+    telemetry = calculate_24h_solar_trajectory(latitude, longitude, date_str)
+    if windows:
+        window_flux = calculate_window_solar_flux(
+            windows=windows,
+            solar_telemetry=telemetry,
+            shading_elements=shading_elements,
+        )
+        for tel in telemetry:
+            tel.window_penetration_flux_wm2 = window_flux.get(tel.hour, 0.0)
+    return telemetry
 
 
 def calculate_24h_solar_trajectory(
@@ -129,104 +298,4 @@ def calculate_24h_solar_trajectory(
 
     return telemetry
 
-
-def calculate_window_solar_flux(
-    windows: List[ArchitecturalElement],
-    solar_telemetry: List[HourlySolarTelemetry],
-    default_shgc: float = 0.65,
-) -> Dict[int, float]:
-    """
-    Computes transmitted solar heat flux (in Watts/m^2) penetrating into the building
-    through window apertures for each hour of the 24-hour cycle.
-    Accounts for aperture orientation, surface area, and incidence angle.
-    """
-    hourly_window_flux: Dict[int, float] = {h: 0.0 for h in range(24)}
-
-    if not windows:
-        return hourly_window_flux
-
-    # Estimate window normal vectors and effective areas
-    window_facets = []
-    for win in windows:
-        coords = win.coordinates
-        if len(coords) >= 2:
-            # Segment vector from p0 to p1
-            p0 = coords[0]
-            p1 = coords[1]
-            dx = p1[0] - p0[0]
-            dy = p1[1] - p0[1]
-            length = math.hypot(dx, dy)
-            if length > 1e-4:
-                # Normal perpendicular to window surface (pointing outward)
-                # In 2D floorplan coordinates: normal (-dy, dx)
-                nx = -dy / length
-                ny = dx / length
-                # Window azimuth angle (degrees)
-                win_azimuth = (math.degrees(math.atan2(nx, ny)) + 360.0) % 360.0
-                area = max(1.0, length * 1.5)  # Nominal window height 1.5m
-                window_facets.append({
-                    "normal": (nx, ny),
-                    "azimuth": win_azimuth,
-                    "area": area,
-                    "width": getattr(win, "thickness", None) or length,
-                })
-
-    if not window_facets:
-        return hourly_window_flux
-
-    for tel in solar_telemetry:
-        hour = tel.hour
-        if tel.elevation_deg <= 0.0 or tel.dni_wm2 <= 0:
-            hourly_window_flux[hour] = 0.0
-            continue
-
-        sun_az_rad = math.radians(tel.azimuth_deg)
-        sun_el_rad = math.radians(tel.elevation_deg)
-
-        # Sun beam unit vector in horizontal plane (X = East, Y = North)
-        sx = math.sin(sun_az_rad) * math.cos(sun_el_rad)
-        sy = math.cos(sun_az_rad) * math.cos(sun_el_rad)
-
-        total_gain_for_hour = 0.0
-        for facet in window_facets:
-            nx, ny = facet["normal"]
-            # Cosine of beam angle with window normal
-            # Beam comes from direction (sx, sy), so outward normal dot beam direction
-            cos_theta = -(nx * sx + ny * sy)
-            if cos_theta > 0:
-                direct_flux = (
-                    tel.dni_wm2
-                    * cos_theta
-                    * default_shgc
-                    * facet["area"]
-                )
-            else:
-                direct_flux = 0.0
-
-            # Diffuse component through glass
-            diffuse_flux = (
-                tel.dhi_wm2 * 0.5 * default_shgc * facet["area"]
-            )
-            total_gain_for_hour += direct_flux + diffuse_flux
-
-        hourly_window_flux[hour] = round(total_gain_for_hour, 2)
-
-    return hourly_window_flux
-
-
-def calculate_full_diurnal_solar_data(
-    latitude: float,
-    longitude: float,
-    date_str: str = "2026-06-21",
-    windows: Optional[List[ArchitecturalElement]] = None,
-) -> List[HourlySolarTelemetry]:
-    """
-    Computes 24-hour solar telemetry including direct window penetration flux.
-    """
-    telemetry = calculate_24h_solar_trajectory(latitude, longitude, date_str)
-    if windows:
-        window_flux = calculate_window_solar_flux(windows, telemetry)
-        for tel in telemetry:
-            tel.window_penetration_flux_wm2 = window_flux.get(tel.hour, 0.0)
-    return telemetry
 
