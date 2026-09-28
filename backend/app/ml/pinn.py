@@ -9,6 +9,7 @@ from app.models.schemas import (
     ElementType,
     HVACNodeSpec,
 )
+from app.services.iot import iot_store
 
 
 class ThermalPINN(nn.Module):
@@ -69,8 +70,9 @@ def compute_hvac_cooling_sink(
         if not node.active:
             continue
 
-        nx = float(node.position[0])
-        ny = float(node.position[1]) if len(node.position) > 1 else 0.5
+        coords = node.get_coords()
+        nx = float(coords[0])
+        ny = float(coords[1])
         nx = max(0.05, min(0.95, nx))
         ny = max(0.05, min(0.95, ny))
 
@@ -169,8 +171,9 @@ def generate_collocation_dataset(
         for node in request.hvac_nodes:
             if not node.active:
                 continue
-            nx = max(0.05, min(0.95, float(node.position[0])))
-            ny = max(0.05, min(0.95, float(node.position[1])))
+            coords = node.get_coords()
+            nx = max(0.05, min(0.95, float(coords[0])))
+            ny = max(0.05, min(0.95, float(coords[1])))
             # Scatter 60 points in local Gaussian radius around diffuser
             hx = np.random.normal(nx, 0.08, (60, 1))
             hy = np.random.normal(ny, 0.08, (60, 1))
@@ -285,6 +288,26 @@ def solve_24h_thermal_grid(
     xyt_ic = xyt_ic.to(device)
     t_ic_target = torch.full((xyt_ic.shape[0], 1), request.ambient_base_temp - 2.5, device=device)
 
+    # 4. Prepare IoT Physical Grounding Observations (Overwrites boundary conditions)
+    iot_points_tensor: Optional[torch.Tensor] = None
+    iot_targets_tensor: Optional[torch.Tensor] = None
+    active_sensors = []
+
+    if request.sync_with_iot:
+        active_sensors = iot_store.get_all_sensors()
+        if active_sensors:
+            iot_pts_list = []
+            iot_t_list = []
+            for s in active_sensors:
+                # Sensor observation across diurnal window around peak/current time
+                for t_sample in [0.25, 0.45, 0.55, 0.65, 0.75]:
+                    iot_pts_list.append([float(s.x), float(s.y), t_sample])
+                    iot_t_list.append([float(s.temperature_celsius)])
+
+            if iot_pts_list:
+                iot_points_tensor = torch.tensor(iot_pts_list, dtype=torch.float32, device=device)
+                iot_targets_tensor = torch.tensor(iot_t_list, dtype=torch.float32, device=device)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=0.003)
     loss_fn = nn.MSELoss()
 
@@ -312,6 +335,13 @@ def solve_24h_thermal_grid(
         loss_ic = loss_fn(pred_ic, t_ic_target)
 
         total_loss = loss_pde + (2.0 * loss_bc) + (1.5 * loss_ic)
+
+        # 4. Physical IoT Sensor Boundary Loss Grounding
+        if iot_points_tensor is not None and iot_targets_tensor is not None:
+            pred_iot = model(iot_points_tensor)
+            loss_iot = loss_fn(pred_iot, iot_targets_tensor)
+            total_loss = total_loss + (3.0 * loss_iot)
+
         total_loss.backward()
         optimizer.step()
 
@@ -354,6 +384,22 @@ def solve_24h_thermal_grid(
 
     avg_temp = float(np.mean(all_temps))
 
+    # Evaluate model predictions at physical IoT sensor points for Simulated vs Actual variance
+    iot_variances_map: Dict[str, float] = {}
+    sensor_sim_map: Dict[str, float] = {}
+
+    if active_sensors:
+        with torch.no_grad():
+            for s in active_sensors:
+                # Query model at sensor coordinate at current peak afternoon time (13:30 = 0.56)
+                eval_pt = torch.tensor([[float(s.x), float(s.y), 0.56]], dtype=torch.float32, device=device)
+                pred_t = float(model(eval_pt).item())
+                sensor_sim_map[s.sensor_id] = pred_t
+                iot_variances_map[s.sensor_id] = round(s.temperature_celsius - pred_t, 2)
+
+        # Update global IoT store with new simulated counterparts
+        iot_store.update_simulated_readings(sensor_sim_map)
+
     return ThermalSimulationGridResponse(
         time_steps=time_steps,
         solar_telemetry=solar_telemetry,
@@ -362,6 +408,7 @@ def solve_24h_thermal_grid(
         min_temperature=round(global_min, 2),
         max_temperature=round(global_max, 2),
         average_temperature=round(avg_temp, 2),
+        iot_variances=iot_variances_map if iot_variances_map else None,
         status="COMPLETED",
-        message="24-hour PINN thermal simulation with HVAC dynamics completed.",
+        message="24-hour PINN thermal simulation with live IoT synchronization completed.",
     )

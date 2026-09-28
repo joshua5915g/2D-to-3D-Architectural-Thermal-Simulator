@@ -6,16 +6,80 @@ import { OrbitControls, Grid, ContactShadows } from "@react-three/drei";
 import * as THREE from "three";
 import { WallMesh } from "./WallMesh";
 import { HVACNode } from "./HVACNode";
+import { IoTWidget } from "./IoTWidget";
+import { WindMesh } from "./WindMesh";
+import { VentilationWidget } from "./VentilationWidget";
 import { TimelineControl } from "./TimelineControl";
 import { useFloorplanData } from "@/hooks/useFloorplanData";
 import { FloorplanVectorData } from "@/types/project";
-import { ThermalSimulationGridData, HourlySolarTelemetry, HVACNodeData } from "@/types/thermal";
-import { Layers, Box, Flame, Sparkles, Thermometer, SunMedium, Snowflake, Plus } from "lucide-react";
+import {
+  ThermalSimulationGridData,
+  HourlySolarTelemetry,
+  HVACNodeData,
+  IoTSensorData,
+  WindowStateData,
+  CFDSimulationResponse,
+} from "@/types/thermal";
+import {
+  Layers,
+  Box,
+  Flame,
+  Sparkles,
+  Thermometer,
+  SunMedium,
+  Snowflake,
+  Plus,
+  Wind,
+} from "lucide-react";
 
 interface FloorplanViewerProps {
   projectId?: string | null;
   customVectorData?: FloorplanVectorData | null;
   initialThermalMode?: boolean;
+}
+
+/**
+ * 3D Physical Smart Sensor Pin Marker with Burgundy Halo
+ */
+function IoTSensorPin({
+  sensor,
+  worldScale = 16.0,
+}: {
+  sensor: IoTSensorData;
+  worldScale?: number;
+}) {
+  const posX = (sensor.x - 0.5) * worldScale;
+  const posZ = (sensor.y - 0.5) * worldScale;
+  const posY = sensor.z ?? 1.2;
+
+  return (
+    <group position={[posX, posY, posZ]}>
+      {/* Sensor Beacon Sphere */}
+      <mesh castShadow>
+        <sphereGeometry args={[0.16, 16, 16]} />
+        <meshStandardMaterial
+          color="#FFFFFF"
+          emissive="#6D001A"
+          emissiveIntensity={1.8}
+          roughness={0.1}
+          metalness={0.9}
+        />
+      </mesh>
+      {/* Sensor Stalk */}
+      <line>
+        <bufferGeometry
+          attach="geometry"
+          onUpdate={(geo) => {
+            geo.setFromPoints([
+              new THREE.Vector3(0, 0, 0),
+              new THREE.Vector3(0, -posY + 0.02, 0),
+            ]);
+          }}
+        />
+        <lineBasicMaterial attach="material" color="#6D001A" transparent opacity={0.4} />
+      </line>
+    </group>
+  );
 }
 
 /**
@@ -108,7 +172,113 @@ export function FloorplanViewer({
     },
   ]);
 
+  // Live IoT Smart Sensor State
+  const [iotSensors, setIotSensors] = useState<IoTSensorData[]>([]);
+
+  // CFD Natural Ventilation State
+  const [ventilationMode, setVentilationMode] = useState(true);
+  const [windSpeed, setWindSpeed] = useState(3.5);
+  const [windDirection, setWindDirection] = useState(225.0);
+  const [windowStates, setWindowStates] = useState<Record<string, boolean>>({});
+  const [cfdData, setCfdData] = useState<CFDSimulationResponse | null>(null);
+  const [isCfdSimulating, setIsCfdSimulating] = useState(false);
+
   const activeVectorData = customVectorData || streamedData;
+
+  // Initialize all windows as operable/open
+  useEffect(() => {
+    if (!activeVectorData) return;
+    const initial: Record<string, boolean> = {};
+    activeVectorData.elements
+      .filter((el) => el.type === "window")
+      .forEach((el) => {
+        initial[el.id] = true;
+      });
+    setWindowStates(initial);
+  }, [activeVectorData]);
+
+  const handleToggleWindow = (windowId: string) => {
+    setWindowStates((prev) => ({
+      ...prev,
+      [windowId]: prev[windowId] === undefined ? false : !prev[windowId],
+    }));
+  };
+
+  const handleOpenAllWindows = () => {
+    if (!activeVectorData) return;
+    const next: Record<string, boolean> = {};
+    activeVectorData.elements
+      .filter((el) => el.type === "window")
+      .forEach((el) => {
+        next[el.id] = true;
+      });
+    setWindowStates(next);
+  };
+
+  const handleCloseAllWindows = () => {
+    if (!activeVectorData) return;
+    const next: Record<string, boolean> = {};
+    activeVectorData.elements
+      .filter((el) => el.type === "window")
+      .forEach((el) => {
+        next[el.id] = false;
+      });
+    setWindowStates(next);
+  };
+
+  // Debounced CFD Simulation trigger
+  const cfdDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (!activeVectorData || activeVectorData.elements.length === 0 || !ventilationMode) return;
+
+    if (cfdDebounceRef.current) clearTimeout(cfdDebounceRef.current);
+
+    let isMounted = true;
+    cfdDebounceRef.current = setTimeout(async () => {
+      try {
+        setIsCfdSimulating(true);
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_API_URL || "http://localhost:8001";
+
+        const winList: WindowStateData[] = activeVectorData.elements
+          .filter((el) => el.type === "window")
+          .map((el) => ({
+            window_id: el.id,
+            is_open: windowStates[el.id] ?? true,
+            open_fraction: (windowStates[el.id] ?? true) ? 1.0 : 0.0,
+          }));
+
+        const res = await fetch(`${backendUrl}/api/cfd/simulate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            vector_data: activeVectorData,
+            window_states: winList,
+            wind_speed_mps: windSpeed,
+            wind_direction_deg: windDirection,
+            outdoor_temp_celsius: 24.0,
+            indoor_avg_temp_celsius: gridData?.average_temperature ?? 28.0,
+            grid_resolution: 24,
+            epochs: 18,
+          }),
+        });
+
+        if (res.ok) {
+          const data: CFDSimulationResponse = await res.json();
+          if (isMounted) setCfdData(data);
+        }
+      } catch (err) {
+        console.warn("CFD simulation error:", err);
+      } finally {
+        if (isMounted) setIsCfdSimulating(false);
+      }
+    }, 450);
+
+    return () => {
+      isMounted = false;
+      if (cfdDebounceRef.current) clearTimeout(cfdDebounceRef.current);
+    };
+  }, [activeVectorData, windowStates, windSpeed, windDirection, ventilationMode, gridData?.average_temperature]);
 
   const wallCount = activeVectorData?.element_counts?.wall ?? 0;
   const windowCount = activeVectorData?.element_counts?.window ?? 0;
@@ -279,6 +449,29 @@ export function FloorplanViewer({
             />
           ))}
 
+          {/* Physical IoT Smart Sensor Markers */}
+          {iotSensors.map((sensor) => (
+            <IoTSensorPin
+              key={sensor.sensor_id}
+              sensor={sensor}
+              worldScale={16.0}
+            />
+          ))}
+
+          {/* Natural Ventilation & CFD Streamlines */}
+          {ventilationMode && (
+            <WindMesh
+              vectorData={activeVectorData}
+              cfdData={cfdData}
+              windowStates={windowStates}
+              onToggleWindow={handleToggleWindow}
+              worldScale={16.0}
+              wallHeight={wallHeight}
+              windSpeedMps={windSpeed}
+              windDirectionDeg={windDirection}
+            />
+          )}
+
           {/* Architectural Dark Grid with Burgundy Accents */}
           <Grid
             renderOrder={-1}
@@ -346,6 +539,19 @@ export function FloorplanViewer({
             {wireframe ? "Wireframe" : "Solid"}
           </button>
 
+          {/* Natural Ventilation CFD Button */}
+          <button
+            onClick={() => setVentilationMode(!ventilationMode)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              ventilationMode
+                ? "bg-[#6D001A] text-white shadow-[0_0_12px_#6D001A] border border-burgundy-400/50"
+                : "bg-surface hover:bg-surface-hover text-neutral-400 border border-white/10"
+            }`}
+          >
+            <Wind className={`w-3.5 h-3.5 ${ventilationMode ? "animate-pulse text-[#FF2A55]" : ""}`} />
+            {ventilationMode ? "CFD Wind Flow" : "Wind Off"}
+          </button>
+
           <div className="h-4 w-[1px] bg-white/15 mx-1" />
 
           {/* Wall Height Slider */}
@@ -405,53 +611,74 @@ export function FloorplanViewer({
         )}
       </div>
 
-      {/* Floating Top Right: Vector & Thermal Telemetry Stats */}
-      <div className="absolute top-5 right-5 z-10 glass-panel rounded-xl p-4 text-white min-w-[240px]">
-        <div className="border-b border-white/10 pb-2 mb-2 flex items-center justify-between">
-          <span className="text-xs uppercase font-bold tracking-wider text-burgundy-400 flex items-center gap-1.5">
-            <Box className="w-3.5 h-3.5" /> Phase 5 Thermal Engine
-          </span>
-          <span className="text-[10px] text-neutral-500 font-mono">60 FPS WebGL</span>
+      {/* Floating Top Right: Vector Telemetry Stats & Live IoT Digital Twin */}
+      <div className="absolute top-5 right-5 z-10 flex flex-col gap-2.5 w-80 max-h-[calc(100vh-140px)] overflow-y-auto no-scrollbar pointer-events-auto">
+        {/* Vector & Thermal Telemetry Stats */}
+        <div className="glass-panel rounded-xl p-4 text-white">
+          <div className="border-b border-white/10 pb-2 mb-2 flex items-center justify-between">
+            <span className="text-xs uppercase font-bold tracking-wider text-burgundy-400 flex items-center gap-1.5">
+              <Box className="w-3.5 h-3.5" /> Phase 5 Thermal Engine
+            </span>
+            <span className="text-[10px] text-neutral-500 font-mono">60 FPS WebGL</span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-center text-xs mb-3">
+            <div className="bg-[#121212] p-2 rounded-lg border border-white/5">
+              <div className="text-[10px] uppercase text-neutral-400">Walls</div>
+              <div className="text-base font-bold font-mono text-white mt-0.5">
+                {wallCount}
+              </div>
+            </div>
+            <div className="bg-[#121212] p-2 rounded-lg border border-white/5">
+              <div className="text-[10px] uppercase text-neutral-400">Windows</div>
+              <div className="text-base font-bold font-mono text-burgundy-300 mt-0.5">
+                {windowCount}
+              </div>
+            </div>
+            <div className="bg-[#121212] p-2 rounded-lg border border-white/5">
+              <div className="text-[10px] uppercase text-neutral-400">Doors</div>
+              <div className="text-base font-bold font-mono text-neutral-200 mt-0.5">
+                {doorCount}
+              </div>
+            </div>
+          </div>
+
+          {/* Thermal Palette Scale Preview */}
+          <div className="bg-[#121212] p-2.5 rounded-lg border border-white/5 space-y-1.5">
+            <div className="flex justify-between text-[11px] font-mono">
+              <span className="text-neutral-400 flex items-center gap-1">
+                <Thermometer className="w-3 h-3 text-burgundy-400" /> Temp Range
+              </span>
+              <span className="text-white font-bold">
+                {tempRange[0].toFixed(1)}°C - {tempRange[1].toFixed(1)}°C
+              </span>
+            </div>
+            {/* Black to Burgundy Gradient Bar */}
+            <div className="w-full h-2 rounded-full border border-white/10 overflow-hidden bg-gradient-to-r from-black via-[#38000C] to-[#6D001A]" />
+            <div className="flex justify-between text-[9px] font-mono text-neutral-500">
+              <span>0.0 (Cold #000000)</span>
+              <span className="text-burgundy-400">1.0 (Peak #6D001A)</span>
+            </div>
+          </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 text-center text-xs mb-3">
-          <div className="bg-[#121212] p-2 rounded-lg border border-white/5">
-            <div className="text-[10px] uppercase text-neutral-400">Walls</div>
-            <div className="text-base font-bold font-mono text-white mt-0.5">
-              {wallCount}
-            </div>
-          </div>
-          <div className="bg-[#121212] p-2 rounded-lg border border-white/5">
-            <div className="text-[10px] uppercase text-neutral-400">Windows</div>
-            <div className="text-base font-bold font-mono text-burgundy-300 mt-0.5">
-              {windowCount}
-            </div>
-          </div>
-          <div className="bg-[#121212] p-2 rounded-lg border border-white/5">
-            <div className="text-[10px] uppercase text-neutral-400">Doors</div>
-            <div className="text-base font-bold font-mono text-neutral-200 mt-0.5">
-              {doorCount}
-            </div>
-          </div>
-        </div>
+        {/* Live IoT Smart Home Sensor Synchronization Dashboard */}
+        <IoTWidget onSensorsUpdate={setIotSensors} />
 
-        {/* Thermal Palette Scale Preview */}
-        <div className="bg-[#121212] p-2.5 rounded-lg border border-white/5 space-y-1.5">
-          <div className="flex justify-between text-[11px] font-mono">
-            <span className="text-neutral-400 flex items-center gap-1">
-              <Thermometer className="w-3 h-3 text-burgundy-400" /> Temp Range
-            </span>
-            <span className="text-white font-bold">
-              {tempRange[0].toFixed(1)}°C - {tempRange[1].toFixed(1)}°C
-            </span>
-          </div>
-          {/* Black to Burgundy Gradient Bar */}
-          <div className="w-full h-2 rounded-full border border-white/10 overflow-hidden bg-gradient-to-r from-black via-[#38000C] to-[#6D001A]" />
-          <div className="flex justify-between text-[9px] font-mono text-neutral-500">
-            <span>0.0 (Cold #000000)</span>
-            <span className="text-burgundy-400">1.0 (Peak #6D001A)</span>
-          </div>
-        </div>
+        {/* Natural Ventilation & CFD Streamlines Dashboard */}
+        <VentilationWidget
+          cfdData={cfdData}
+          isSimulating={isCfdSimulating}
+          windSpeed={windSpeed}
+          onWindSpeedChange={setWindSpeed}
+          windDirection={windDirection}
+          onWindDirectionChange={setWindDirection}
+          windowStates={windowStates}
+          onOpenAllWindows={handleOpenAllWindows}
+          onCloseAllWindows={handleCloseAllWindows}
+          activeMode={ventilationMode}
+          onToggleActive={() => setVentilationMode(!ventilationMode)}
+        />
       </div>
 
       {/* Floating Bottom Center: Diurnal Timeline Scrubber */}

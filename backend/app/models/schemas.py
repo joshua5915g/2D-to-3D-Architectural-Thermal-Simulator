@@ -83,9 +83,13 @@ class HourlySolarTelemetry(BaseModel):
 
 class HVACNodeSpec(BaseModel):
     id: str = Field(..., description="Unique HVAC node identifier (e.g., 'hvac_living_1')")
-    position: Tuple[float, float, float] = Field(
-        ..., description="3D coordinates [x, y, z] in normalized [0, 1] or metric space"
+    name: Optional[str] = Field(default="HVAC Terminal")
+    position: Optional[Tuple[float, float, float]] = Field(
+        default=None, description="3D coordinates [x, y, z] in normalized [0, 1] or metric space"
     )
+    x: Optional[float] = None
+    y: Optional[float] = None
+    z: Optional[float] = None
     setpoint_celsius: float = Field(
         default=21.0, ge=16.0, le=30.0, description="Target cooling thermostat setpoint"
     )
@@ -93,6 +97,12 @@ class HVACNodeSpec(BaseModel):
         default=3.5, ge=0.5, le=20.0, description="Nominal cooling capacity in kW"
     )
     active: bool = Field(default=True, description="Operating state of the HVAC terminal")
+    radius_meters: float = Field(default=3.0)
+
+    def get_coords(self) -> Tuple[float, float, float]:
+        if self.position is not None:
+            return self.position
+        return (self.x if self.x is not None else 0.5, self.y if self.y is not None else 0.5, self.z if self.z is not None else 0.5)
 
 
 class ThermalSimulateRequest(BaseModel):
@@ -120,6 +130,9 @@ class ThermalSimulateRequest(BaseModel):
     epochs: int = Field(
         default=25, ge=5, le=100, description="Fine-tuning training epochs for PINN"
     )
+    sync_with_iot: bool = Field(
+        default=True, description="Whether to synchronize PINN boundary loss with live IoT telemetry"
+    )
 
 
 class ThermalSimulationGridResponse(BaseModel):
@@ -137,6 +150,9 @@ class ThermalSimulationGridResponse(BaseModel):
     min_temperature: float = Field(..., description="Global minimum temperature in Celsius")
     max_temperature: float = Field(..., description="Global maximum temperature in Celsius")
     average_temperature: float = Field(..., description="Mean interior temperature in Celsius")
+    iot_variances: Optional[Dict[str, float]] = Field(
+        default=None, description="Simulated vs Actual variance delta per active IoT sensor"
+    )
     status: str = Field(default="COMPLETED", description="Simulation execution status")
     message: str = Field(default="24-hour PINN thermal simulation completed.")
 
@@ -190,5 +206,69 @@ class GeneratedFloorplanResponse(BaseModel):
     )
     status: str = Field(default="COMPLETED")
     message: str = Field(default="Floorplan synthesized successfully by Generative AI.")
+
+
+class WindowStateSpec(BaseModel):
+    window_id: str = Field(..., description="Identifier of the window element")
+    is_open: bool = Field(default=True, description="Whether the window sash is open")
+    open_fraction: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Effective open area ratio"
+    )
+
+
+class CFDSimulateRequest(BaseModel):
+    vector_data: FloorplanVectorData = Field(
+        ..., description="Extracted architectural vector elements"
+    )
+    window_states: List[WindowStateSpec] = Field(
+        default_factory=list, description="Window operable open/closed states"
+    )
+    wind_speed_mps: float = Field(
+        default=3.5, ge=0.1, le=20.0, description="Ambient incident wind velocity (m/s)"
+    )
+    wind_direction_deg: float = Field(
+        default=225.0, ge=0.0, le=360.0, description="Wind azimuth angle in degrees (0 = North, 90 = East, 180 = South, 270 = West)"
+    )
+    outdoor_temp_celsius: float = Field(
+        default=24.0, description="Outdoor ambient air temperature (Celsius)"
+    )
+    indoor_avg_temp_celsius: float = Field(
+        default=28.0, description="Average indoor temperature for stack effect Boussinesq buoyancy"
+    )
+    grid_resolution: int = Field(
+        default=24, ge=12, le=48, description="CFD mesh grid sampling resolution"
+    )
+    epochs: int = Field(
+        default=20, ge=5, le=80, description="Navier-Stokes PINN training epochs"
+    )
+
+
+class StreamlinePoint3D(BaseModel):
+    x: float
+    y: float
+    z: float
+    velocity_mps: float
+    pressure_norm: float
+
+
+class CFDSimulationResponse(BaseModel):
+    velocity_grid: List[List[List[float]]] = Field(
+        ..., description="Planar velocity magnitude scalar field of shape [Z, Y, X]"
+    )
+    streamlines: List[List[Tuple[float, float, float, float]]] = Field(
+        ..., description="List of 3D flow streamline trajectories: [[(x, y, z, velocity_mps), ...]]"
+    )
+    grid_resolution: int = Field(..., description="Grid dimension resolution")
+    max_velocity_mps: float = Field(..., description="Maximum localized flow velocity in m/s")
+    avg_velocity_mps: float = Field(..., description="Mean interior velocity in m/s")
+    air_changes_per_hour: float = Field(
+        ..., description="Estimated natural volumetric Air Changes per Hour (ACH)"
+    )
+    cross_ventilation_efficiency: float = Field(
+        ..., description="Percentage of interior area with effective air renewal (> 0.2 m/s)"
+    )
+    open_window_count: int = Field(default=0, description="Number of operable open windows")
+    status: str = Field(default="COMPLETED")
+    message: str = Field(default="Navier-Stokes CFD ventilation simulation completed.")
 
 

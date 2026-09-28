@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from app.config import settings
 from app.api.router import api_router
 from app.core.firebase_admin import init_firebase_admin
+from app.services.iot import mqtt_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,8 +18,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Initializing Architectural Thermal Simulator Microservice...")
     init_firebase_admin()
+    mqtt_service.start()
     yield
     logger.info("Shutting down microservice.")
+    mqtt_service.stop()
 
 
 app = FastAPI(
