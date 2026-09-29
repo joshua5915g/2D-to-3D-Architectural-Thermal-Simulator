@@ -133,3 +133,44 @@ export interface ExteriorShadingElement {
   angle_deg?: number;
 }
 
+export type EnvelopeMaterialType =
+  | "STANDARD"
+  | "HIGH_EFFICIENCY"
+  | "PASSIVE_HOUSE_ULTRA";
+
+export type GridTariffType = "FLAT" | "TIME_OF_USE";
+
+export type GridEmissionRegion =
+  | "US_AVERAGE"
+  | "CALIFORNIA_CLEAN"
+  | "COAL_INTENSIVE"
+  | "EU_GREEN";
+
+export interface YearlyCashflowPoint {
+  year: number;
+  standard_cumulative_cost: number;
+  upgraded_cumulative_cost: number;
+  net_savings: number;
+  cumulative_npv: number;
+}
+
+export interface ESGCalculationResponse {
+  annual_hvac_cooling_kwh: number;
+  annual_total_electricity_kwh: number;
+  annual_electricity_cost_usd: number;
+  annual_carbon_emissions_metric_tons: number;
+  carbon_intensity_kg_per_kwh: number;
+  energy_use_intensity_kwh_per_sqft: number;
+  net_zero_compliant: boolean;
+  net_zero_threshold_kwh_per_sqft: number;
+  net_zero_variance_pct: number;
+  upfront_capex_delta_usd: number;
+  annual_opex_savings_usd: number;
+  simple_payback_years: number | null;
+  npv_15_year_usd: number;
+  cashflows_15_year: YearlyCashflowPoint[];
+  status: string;
+  message?: string;
+}
+
+

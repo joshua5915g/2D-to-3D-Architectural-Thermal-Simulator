@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.endpoints import health, vision, thermal, generative, iot, cfd
+from app.api.endpoints import health, vision, thermal, generative, iot, cfd, esg
 from app.api import extract
 
 api_router = APIRouter()
@@ -25,5 +25,10 @@ api_router.include_router(
     cfd.router, prefix="/cfd", tags=["CFD & Natural Ventilation"]
 )
 api_router.include_router(cfd.router, tags=["CFD & Natural Ventilation (Direct)"])
+api_router.include_router(
+    esg.router, prefix="/esg", tags=["Enterprise ESG & Financial ROI"]
+)
+api_router.include_router(esg.router, tags=["Enterprise ESG & Financial ROI (Direct)"])
+
 
 

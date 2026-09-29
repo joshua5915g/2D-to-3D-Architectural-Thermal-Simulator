@@ -10,6 +10,7 @@ import { IoTWidget } from "./IoTWidget";
 import { WindMesh } from "./WindMesh";
 import { VentilationWidget } from "./VentilationWidget";
 import { ExteriorShadingScene, ShadingWidget } from "./ShadingTools";
+import { ESGDashboard } from "./ESGDashboard";
 import { TimelineControl } from "./TimelineControl";
 import { useFloorplanData } from "@/hooks/useFloorplanData";
 import { FloorplanVectorData } from "@/types/project";
@@ -22,6 +23,7 @@ import {
   CFDSimulationResponse,
   ExteriorShadingElement,
   ShadingElementType,
+  EnvelopeMaterialType,
 } from "@/types/thermal";
 import {
   Layers,
@@ -35,6 +37,7 @@ import {
   Wind,
   Sun,
   Umbrella,
+  TrendingUp,
 } from "lucide-react";
 
 interface FloorplanViewerProps {
@@ -234,6 +237,11 @@ export function FloorplanViewer({
   // Passive Solar Shading Interventions State
   const [shadingMode, setShadingMode] = useState(false);
   const [selectedShadingId, setSelectedShadingId] = useState<string | null>(null);
+
+  // Enterprise ESG & Financial ROI State
+  const [esgDashboardOpen, setEsgDashboardOpen] = useState(false);
+  const [activeEnvelopeMaterial, setActiveEnvelopeMaterial] =
+    useState<EnvelopeMaterialType>("HIGH_EFFICIENCY");
   const [shadingElements, setShadingElements] = useState<ExteriorShadingElement[]>([
     {
       id: "tree-south",
@@ -644,18 +652,31 @@ export function FloorplanViewer({
             {ventilationMode ? "CFD Wind Flow" : "Wind Off"}
           </button>
  
-           {/* Passive Solar Shading Interventions Button */}
-           <button
-             onClick={() => setShadingMode(!shadingMode)}
-             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-               shadingMode
-                 ? "bg-[#6D001A] text-white shadow-[0_0_12px_#6D001A] border border-burgundy-400/50"
-                 : "bg-surface hover:bg-surface-hover text-neutral-400 border border-white/10"
-             }`}
-           >
-             <Umbrella className={`w-3.5 h-3.5 ${shadingMode ? "animate-bounce text-amber-400" : ""}`} />
-             {shadingMode ? "Shading Active" : "Passive Shading"}
-           </button>
+          {/* Passive Solar Shading Interventions Button */}
+          <button
+            onClick={() => setShadingMode(!shadingMode)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              shadingMode
+                ? "bg-[#6D001A] text-white shadow-[0_0_12px_#6D001A] border border-burgundy-400/50"
+                : "bg-surface hover:bg-surface-hover text-neutral-400 border border-white/10"
+            }`}
+          >
+            <Umbrella className={`w-3.5 h-3.5 ${shadingMode ? "animate-bounce text-amber-400" : ""}`} />
+            {shadingMode ? "Shading Active" : "Passive Shading"}
+          </button>
+
+          {/* Enterprise ESG & Financial ROI Button */}
+          <button
+            onClick={() => setEsgDashboardOpen(!esgDashboardOpen)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              esgDashboardOpen
+                ? "bg-[#6D001A] text-white shadow-[0_0_12px_#6D001A] border border-burgundy-400/50"
+                : "bg-surface hover:bg-surface-hover text-neutral-400 border border-white/10"
+            }`}
+          >
+            <TrendingUp className={`w-3.5 h-3.5 ${esgDashboardOpen ? "text-[#FF1744] animate-pulse" : ""}`} />
+            {esgDashboardOpen ? "ESG & ROI Active" : "ESG & ROI"}
+          </button>
  
            <div className="h-4 w-[1px] bg-white/15 mx-1" />
 
@@ -801,6 +822,15 @@ export function FloorplanViewer({
           />
         )}
       </div>
+
+      {/* Enterprise ESG & Financial ROI Dashboard Overlay */}
+      <ESGDashboard
+        isOpen={esgDashboardOpen}
+        onClose={() => setEsgDashboardOpen(false)}
+        floorAreaSqft={1800}
+        simulatedAvgTemp={gridData?.average_temperature ?? 27.5}
+        onMaterialChange={(mat) => setActiveEnvelopeMaterial(mat)}
+      />
 
       {/* Floating Bottom Center: Diurnal Timeline Scrubber */}
       <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 w-[94%] max-w-2xl pointer-events-auto">

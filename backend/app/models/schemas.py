@@ -306,3 +306,116 @@ class CFDSimulationResponse(BaseModel):
     message: str = Field(default="Navier-Stokes CFD ventilation simulation completed.")
 
 
+class EnvelopeMaterialType(str, Enum):
+    STANDARD = "STANDARD"
+    HIGH_EFFICIENCY = "HIGH_EFFICIENCY"
+    PASSIVE_HOUSE_ULTRA = "PASSIVE_HOUSE_ULTRA"
+
+
+class GridTariffType(str, Enum):
+    FLAT = "FLAT"
+    TIME_OF_USE = "TIME_OF_USE"
+
+
+class GridEmissionRegion(str, Enum):
+    US_AVERAGE = "US_AVERAGE"
+    CALIFORNIA_CLEAN = "CALIFORNIA_CLEAN"
+    COAL_INTENSIVE = "COAL_INTENSIVE"
+    EU_GREEN = "EU_GREEN"
+
+
+class EnvelopeMaterialSpec(BaseModel):
+    material_type: EnvelopeMaterialType
+    name: str
+    wall_r_value: float = Field(..., description="Wall thermal resistance (ft²·°F·h/BTU)")
+    roof_r_value: float = Field(..., description="Roof thermal resistance (ft²·°F·h/BTU)")
+    window_u_value: float = Field(..., description="Window thermal transmittance (BTU/h·ft²·°F)")
+    shgc: float = Field(..., description="Solar Heat Gain Coefficient")
+    capex_premium_per_sqft: float = Field(..., description="Upfront material cost premium ($/sqft)")
+
+
+class ESGCalculationRequest(BaseModel):
+    floor_area_sqft: float = Field(
+        default=1800.0, ge=300.0, le=20000.0, description="Building gross floor area in sqft"
+    )
+    ceiling_height_meters: float = Field(default=2.8, ge=2.0, le=6.0)
+    target_temp_celsius: float = Field(
+        default=22.2, description="Target interior cooling setpoint (72°F = 22.2°C)"
+    )
+    envelope_material: EnvelopeMaterialType = Field(
+        default=EnvelopeMaterialType.STANDARD, description="Envelope insulation and glazing grade"
+    )
+    tariff_type: GridTariffType = Field(
+        default=GridTariffType.TIME_OF_USE, description="Utility rate structure: FLAT or TIME_OF_USE"
+    )
+    grid_region: GridEmissionRegion = Field(
+        default=GridEmissionRegion.US_AVERAGE, description="Electrical grid carbon intensity zone"
+    )
+    simulated_avg_temp: Optional[float] = Field(
+        default=27.5, description="Simulated average indoor temperature in Celsius from PINN"
+    )
+    outdoor_avg_temp: Optional[float] = Field(
+        default=32.0, description="Ambient peak outdoor summer temperature in Celsius"
+    )
+    hvac_cop: float = Field(
+        default=3.6, ge=2.0, le=6.0, description="Mechanical chiller / heat pump COP rating"
+    )
+    discount_rate_pct: float = Field(
+        default=5.0, ge=1.0, le=15.0, description="Annual discount rate for financial NPV"
+    )
+
+
+class YearlyCashflowPoint(BaseModel):
+    year: int
+    standard_cumulative_cost: float
+    upgraded_cumulative_cost: float
+    net_savings: float
+    cumulative_npv: float
+
+
+class ESGCalculationResponse(BaseModel):
+    annual_hvac_cooling_kwh: float = Field(
+        ..., description="Projected annual mechanical cooling electrical demand in kWh"
+    )
+    annual_total_electricity_kwh: float = Field(
+        ..., description="Total building annual electrical load (HVAC + baseline plug loads)"
+    )
+    annual_electricity_cost_usd: float = Field(
+        ..., description="Projected annual utility electricity billing in USD"
+    )
+    annual_carbon_emissions_metric_tons: float = Field(
+        ..., description="Annual Scope 2 operational greenhouse gas emissions in metric tons CO2e"
+    )
+    carbon_intensity_kg_per_kwh: float = Field(
+        ..., description="Regional grid carbon emissions factor in kg CO2e / kWh"
+    )
+    energy_use_intensity_kwh_per_sqft: float = Field(
+        ..., description="Energy Use Intensity (EUI) in kWh / sqft / year"
+    )
+    net_zero_compliant: bool = Field(
+        ..., description="True if building complies with Net-Zero Energy ready thresholds (< 22 kWh/sqft/yr)"
+    )
+    net_zero_threshold_kwh_per_sqft: float = Field(default=22.0)
+    net_zero_variance_pct: float = Field(
+        ..., description="Variance from Net-Zero threshold (+% violates threshold, -% conforms)"
+    )
+    upfront_capex_delta_usd: float = Field(
+        ..., description="Additional capital expenditure over standard baseline ($)"
+    )
+    annual_opex_savings_usd: float = Field(
+        ..., description="Annual operating electricity cost savings compared to standard baseline ($)"
+    )
+    simple_payback_years: Optional[float] = Field(
+        default=None, description="Simple capital payback breakeven period in years"
+    )
+    npv_15_year_usd: float = Field(
+        ..., description="15-Year Net Present Value (NPV) of efficiency upgrade"
+    )
+    cashflows_15_year: List[YearlyCashflowPoint] = Field(
+        default_factory=list, description="15-year cumulative financial cashflow projection"
+    )
+    status: str = Field(default="COMPLETED")
+    message: str = Field(default="ESG & Financial ROI calculated successfully.")
+
+
+
